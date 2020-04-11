@@ -9,13 +9,12 @@ character according to some rule. `astrid` takes a string and some rewrite
 rules as CLI arguments and will rewrite a string `-n` times.
 
 ```
-$ astrid a 'a=ab' 'b=a' -n 7
-     rules: b -> a
-            a -> ab
-     input: a
+$ astrid a a=ab b=a -n 7
+     rules: a -> ab
+            b -> a
 iterations: 7
-    output: a
-            ab
+     input: a
+    output: ab
             aba
             abaab
             abaababa

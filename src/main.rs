@@ -75,13 +75,14 @@ fn main() {
 
         let generations = strings
             .iter()
+            .skip(1)
             .map(|v| v.iter().collect::<String>())
             .collect::<Vec<_>>()
             .join("\n            ");
 
         println!("     rules: {}", rule_string);
-        println!("     input: {}", input_pattern);
         println!("iterations: {}", iterations);
+        println!("     input: {}", input_pattern);
         println!("    output: {}", generations);
     }
 }
