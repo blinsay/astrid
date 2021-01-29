@@ -8,13 +8,31 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use svg::{node::element::path::Data as SVGData, node::element::Path as SVGPath};
 
+static ABOUT: &str = r"generate L-systems
+
+astrid accepts an initial pattern and one or more rewrite_rules. The starting
+pattern may be any string, and rewrite_rules are of the form P=R, where P is
+a single character and R is a string to replace it with. If multiple rules
+have the same starting character, a rule will be selected at random.
+
+With the --svg flag, astrid generates SVG output to stdout by interpreting the
+characters F,f as forward movement with and without drawing, + and - as turning
+left and right, and [, ] as starting a new branch.
+";
+
 fn main() {
     let arg_matches = clap_app!(astrid =>
-        (about: "generate L-systems")
+        (about: ABOUT)
         (version: "0.69")
-        (@arg delta: -d --delta +takes_value {valid_angle} "Size of the angle to turn at. Only used if an SVG is produced")
+        // options
+        (@arg iterations: -n --iterations +takes_value {valid_usize}
+            "The number of times to apply the rewrite rules")
+        // svg options
         (@arg svg: -s --svg "write an SVG to stdout")
-        (@arg iterations: -n --iterations +takes_value {valid_usize} "The number of times to apply the rewrite rule")
+        (@arg delta: -d --delta +takes_value {valid_angle}
+            "The angle of each turn. (svg only)")
+        (@arg forward: --forward +takes_value
+         "Characters to treat as F(orward) moves (svg only)")
         (@arg pattern: * +takes_value "The pattern to rewrite")
         (@arg rewrite_rules: +takes_value {valid_rule} * ... "A rewrite rule")
     )
@@ -52,10 +70,15 @@ fn main() {
     if arg_matches.is_present("svg") {
         // try to render an SVG. this only works if the L-system included the
         // turtle alphabet in its set of symbols.
-        let doc = match paths_to_svg(turtle_walk(delta, 10.0, &string)) {
+        let forward_chars: Vec<char> = arg_matches
+            .value_of("forward")
+            .unwrap_or("")
+            .chars()
+            .collect();
+        let doc = match paths_to_svg(turtle_walk(delta, 10.0, &forward_chars, &string)) {
             Some(doc) => doc,
             None => {
-                eprintln!("error: there's nothing to draw. Run astrid --help for more info.");
+                eprintln!("oops: there's nothing to draw. Run astrid --help for more info.");
                 return;
             }
         };
@@ -69,7 +92,7 @@ fn main() {
         // asked to see everything!
         let rule_string = rewrite_rules
             .iter()
-            .map(|rule| format_rule(rule))
+            .map(format_rule)
             .collect::<Vec<_>>()
             .join("\n            ");
 
@@ -95,9 +118,9 @@ fn valid_usize(v: String) -> Result<(), String> {
 
 fn valid_angle(v: String) -> Result<(), String> {
     match v.parse::<f32>() {
-        Ok(n) if 0.0 <= n && n <= 90.0 => Ok(()),
+        Ok(n) if 0.0 <= n && n <= 180.0 => Ok(()),
         _ => Err(String::from(
-            "must be a valid angle between 0 and 90 degrees",
+            "must be a valid angle between 0 and 180 degrees",
         )),
     }
 }
@@ -111,20 +134,20 @@ fn valid_rule(v: String) -> Result<(), String> {
 // For rewriting a->ab or F->FF-F-F-F-F-F+F.
 type RewriteRule = (char, Vec<char>);
 
-static INVALID_RULE_MSG: &'static str = "invalid rewrite rule: rules look like 'p=s'";
+static INVALID_RULE_MSG: &str = "invalid rewrite rule: rules look like 'p=s'";
 
 fn parse_rule(s: &str) -> Result<RewriteRule, String> {
-    let parts: Vec<_> = s.splitn(2, "=").collect();
+    let parts: Vec<_> = s.splitn(2, '=').collect();
 
     let (pattern, replacement) = match &parts[..] {
-        &[pattern, replacement] => (pattern, replacement),
+        [pattern, replacement] => (pattern, replacement),
         _ => return Err(String::from(INVALID_RULE_MSG)),
     };
 
     let pattern = pattern.trim().chars().next();
     let replacement: Vec<_> = replacement.trim().chars().collect();
     match (pattern, replacement) {
-        (Some(pattern), replacement) if replacement.len() > 0 => Ok((pattern, replacement)),
+        (Some(pattern), replacement) if !replacement.is_empty() => Ok((pattern, replacement)),
         _ => Err(String::from(INVALID_RULE_MSG)),
     }
 }
@@ -180,7 +203,7 @@ impl RewriteRules {
         let rewrite_or_default = |c: char| {
             self.rewrite_char(c, &mut rng)
                 .map(|s| s.to_vec())
-                .unwrap_or(vec![c])
+                .unwrap_or_else(|| vec![c])
         };
 
         s.into_iter().flat_map(rewrite_or_default).collect()
@@ -226,7 +249,12 @@ mod test_rewrite_rules {
 //
 // interprets an L-system string as a turlte walk. handles brancing and
 // pen-up/pen-down instructions.
-fn turtle_walk(delta: f32, step_size: f32, string: &[char]) -> Vec<Vec<Point>> {
+fn turtle_walk(
+    delta: f32,
+    step_size: f32,
+    forward_chars: &[char],
+    string: &[char],
+) -> Vec<Vec<Point>> {
     // most visual coordinate planes grow right and down, but plants drawn
     // by this turtle should look like they're growing up. start the turtle
     // facing "down" so it matches our intutition
@@ -243,11 +271,6 @@ fn turtle_walk(delta: f32, step_size: f32, string: &[char]) -> Vec<Vec<Point>> {
                 paths.push(current_path);
                 position += step_size * Point::unit_vec(heading);
                 current_path = vec![position];
-            }
-            // pen-down, move
-            'F' => {
-                position += step_size * Point::unit_vec(heading);
-                current_path.push(position);
             }
             // rotate left
             '+' => {
@@ -274,6 +297,11 @@ fn turtle_walk(delta: f32, step_size: f32, string: &[char]) -> Vec<Vec<Point>> {
                     position = saved_position;
                     current_path = saved_path;
                 }
+            }
+            // pen-down, move
+            c if *c == 'F' || forward_chars.contains(c) => {
+                position += step_size * Point::unit_vec(heading);
+                current_path.push(position);
             }
             _ => { /* do nothing */ }
         }
@@ -340,21 +368,21 @@ fn paths_to_svg(paths: Vec<Vec<Point>>) -> Option<svg::Document> {
         SVGPath::new()
             .set("fill", "none")
             .set("stroke", "black")
-            .set("stroke-width", 3)
+            .set("stroke-width", 0.5)
             .set("d", pathdata)
     };
 
     let doc = svg::Document::new().set("viewBox", format!("{} {} {} {}", min, max, width, height));
     let doc = paths
         .iter()
-        .filter_map(pathdata)
+        .filter_map(|ps| pathdata(ps))
         .map(style_path)
         .fold(doc, |doc, path| doc.add(path));
 
     Some(doc)
 }
 
-fn pathdata(path: &Vec<Point>) -> Option<SVGData> {
+fn pathdata(path: &[Point]) -> Option<SVGData> {
     let mut points = path.iter();
     let first = points.next()?;
 
