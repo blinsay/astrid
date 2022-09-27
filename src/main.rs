@@ -1,81 +1,106 @@
 use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2 as PI_2;
+use std::fmt::Display;
 use std::io;
 use std::ops::{AddAssign, Mul};
+use std::str::FromStr;
 
-use clap::clap_app;
+use clap::Parser;
 use rand::seq::SliceRandom;
 use rand::Rng;
 use svg::{node::element::path::Data as SVGData, node::element::Path as SVGPath};
 
-static ABOUT: &str = r"generate L-systems
+/// generate L-systems
+///
+/// astrid accepts an initial pattern and one or more rewrite_rules. The starting
+/// pattern may be any string, and rewrite_rules are of the form P=R, where P is
+/// a single character and R is a string to replace it with. If multiple rules
+/// have the same starting character, a rule will be selected at random.
+///
+/// With the --svg flag, astrid generates SVG output to stdout by interpreting the
+/// characters F,f as forward movement with and without drawing, + and - as turning
+/// left and right, and [, ] as starting a new branch.
+#[derive(Debug, Parser)]
+#[clap(version = "0.69")]
+struct Args {
+    /// The number of times to apply rewrite rules.
+    #[clap(short = 'n', long, default_value_t = 1)]
+    iterations: usize,
 
-astrid accepts an initial pattern and one or more rewrite_rules. The starting
-pattern may be any string, and rewrite_rules are of the form P=R, where P is
-a single character and R is a string to replace it with. If multiple rules
-have the same starting character, a rule will be selected at random.
+    /// Write an SVG to stdout instead of rule output.
+    #[clap(short, long)]
+    svg: bool,
 
-With the --svg flag, astrid generates SVG output to stdout by interpreting the
-characters F,f as forward movement with and without drawing, + and - as turning
-left and right, and [, ] as starting a new branch.
-";
+    /// The angle of each turn (svg only)
+    #[clap(short, long, default_value_t = 90.0, value_parser = clap::builder::ValueParser::new(parse_angle))]
+    delta: f32,
+
+    /// Characters to treat as forward moves (svg only)
+    #[clap(short, long, default_value = "F")]
+    forward: String,
+
+    /// The pattern to rewrite.
+    pattern: String,
+
+    /// A rewrite rule used to transform the initial pattern.
+    rewrite_rules: Vec<RewriteRule>,
+}
 
 fn main() {
-    let arg_matches = clap_app!(astrid =>
-        (about: ABOUT)
-        (version: "0.69")
-        // options
-        (@arg iterations: -n --iterations +takes_value {valid_usize}
-            "The number of times to apply the rewrite rules")
-        // svg options
-        (@arg svg: -s --svg "write an SVG to stdout")
-        (@arg delta: -d --delta +takes_value {valid_angle}
-            "The angle of each turn. (svg only)")
-        (@arg forward: --forward +takes_value
-         "Characters to treat as F(orward) moves (svg only)")
-        (@arg pattern: * +takes_value "The pattern to rewrite")
-        (@arg rewrite_rules: +takes_value {valid_rule} * ... "A rewrite rule")
-    )
-    .get_matches();
+    let args = Args::parse();
+    // let arg_matches = clap_app!(astrid =>
+    //     (about: ABOUT)
+    //     (version: "0.69")
+    //     // options
+    //     (@arg iterations: -n --iterations +takes_value {valid_usize}
+    //         "The number of times to apply the rewrite rules")
+    //     // svg options
+    //     (@arg svg: -s --svg "write an SVG to stdout")
+    //     (@arg delta: -d --delta +takes_value {valid_angle}
+    //         "The angle of each turn. (svg only)")
+    //     (@arg forward: --forward +takes_value
+    //      "Characters to treat as F(orward) moves (svg only)")
+    //     (@arg pattern: * +takes_value "The pattern to rewrite")
+    //     (@arg rewrite_rules: +takes_value {valid_rule} * ... "A rewrite rule")
+    // )
+    // .get_matches();
 
-    let input_pattern = arg_matches
-        .value_of("pattern")
-        .expect("pattern is required");
-    let delta = arg_matches
-        .value_of("delta")
-        .unwrap_or("90")
-        .parse::<f32>()
-        .expect("should have validated degrees")
-        .to_radians();
+    // let input_pattern = arg_matches
+    //     .value_of("pattern")
+    //     .expect("pattern is required");
+    // let delta = arg_matches
+    //     .value_of("delta")
+    //     .unwrap_or("90")
+    //     .parse::<f32>()
+    //     .expect("should have validated degrees")
+    //     .to_radians();
 
-    let iterations: usize = arg_matches
-        .value_of("iterations")
-        .unwrap_or("1")
-        .parse()
-        .expect("invalid number of iterations");
+    // let iterations: usize = arg_matches
+    //     .value_of("iterations")
+    //     .unwrap_or("1")
+    //     .parse()
+    //     .expect("invalid number of iterations");
 
-    let rewrite_rules: RewriteRules = arg_matches
-        .values_of("rewrite_rules")
-        .expect("rewrite rules are required by arg parsing")
-        .map(|s| parse_rule(s).expect("rule validation is required by arg parsing"))
-        .collect();
+    // let rewrite_rules: RewriteRules = arg_matches
+    //     .values_of("rewrite_rules")
+    //     .expect("rewrite rules are required by arg parsing")
+    //     .map(|s| parse_rule(s).expect("rule validation is required by arg parsing"))
+    //     .collect();
 
-    let mut string: Vec<char> = input_pattern.chars().collect();
+    let mut string: Vec<char> = args.pattern.chars().collect();
+    let rewrite_rules: RewriteRules = args.rewrite_rules.into_iter().collect();
+
     let mut strings = vec![string.clone()];
-    for _ in 0..iterations {
+    for _ in 0..args.iterations {
         string = rewrite_rules.rewrite_string(string);
         strings.push(string.clone());
     }
 
-    if arg_matches.is_present("svg") {
+    if args.svg {
         // try to render an SVG. this only works if the L-system included the
         // turtle alphabet in its set of symbols.
-        let forward_chars: Vec<char> = arg_matches
-            .value_of("forward")
-            .unwrap_or("")
-            .chars()
-            .collect();
-        let doc = match paths_to_svg(turtle_walk(delta, 10.0, &forward_chars, &string)) {
+        let forward_chars: Vec<char> = args.forward.chars().collect();
+        let doc = match paths_to_svg(turtle_walk(args.delta, 10.0, &forward_chars, &string)) {
             Some(doc) => doc,
             None => {
                 eprintln!("oops: there's nothing to draw. Run astrid --help for more info.");
@@ -92,7 +117,7 @@ fn main() {
         // asked to see everything!
         let rule_string = rewrite_rules
             .iter()
-            .map(format_rule)
+            .map(|r| format!("{r}"))
             .collect::<Vec<_>>()
             .join("\n            ");
 
@@ -104,56 +129,56 @@ fn main() {
             .join("\n            ");
 
         println!("     rules: {}", rule_string);
-        println!("iterations: {}", iterations);
-        println!("     input: {}", input_pattern);
+        println!("iterations: {}", args.iterations);
+        println!("     input: {}", args.pattern);
         println!("    output: {}", generations);
     }
 }
 
-fn valid_usize(v: String) -> Result<(), String> {
-    v.parse::<usize>()
-        .map(|_| ())
-        .map_err(|_| String::from("must be a positive number"))
-}
+fn parse_angle(s: &str) -> Result<f32, &'static str> {
+    let value: f32 = s.parse().map_err(|_| "invalid number")?;
 
-fn valid_angle(v: String) -> Result<(), String> {
-    match v.parse::<f32>() {
-        Ok(n) if 0.0 <= n && n <= 180.0 => Ok(()),
-        _ => Err(String::from(
-            "must be a valid angle between 0 and 180 degrees",
-        )),
+    if !(0.0..=180.0).contains(&value) {
+        return Err("angle must be between 0.0 and 180.0 degrees");
     }
-}
 
-fn valid_rule(v: String) -> Result<(), String> {
-    parse_rule(&v).map(|_| ())
+    Ok(value)
 }
 
 // A single rewrite rule mapping a character to a replacement sequence.
 //
 // For rewriting a->ab or F->FF-F-F-F-F-F+F.
-type RewriteRule = (char, Vec<char>);
+#[derive(Debug, PartialEq, Eq)]
+struct RewriteRule(char, Vec<char>);
 
-static INVALID_RULE_MSG: &str = "invalid rewrite rule: rules look like 'p=s'";
-
-fn parse_rule(s: &str) -> Result<RewriteRule, String> {
-    let parts: Vec<_> = s.splitn(2, '=').collect();
-
-    let (pattern, replacement) = match &parts[..] {
-        [pattern, replacement] => (pattern, replacement),
-        _ => return Err(String::from(INVALID_RULE_MSG)),
-    };
-
-    let pattern = pattern.trim().chars().next();
-    let replacement: Vec<_> = replacement.trim().chars().collect();
-    match (pattern, replacement) {
-        (Some(pattern), replacement) if !replacement.is_empty() => Ok((pattern, replacement)),
-        _ => Err(String::from(INVALID_RULE_MSG)),
+impl Display for RewriteRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} -> {}", self.0, self.1.iter().collect::<String>())
     }
 }
 
-fn format_rule((p, s): RewriteRule) -> String {
-    format!("{} -> {}", p, s.iter().collect::<String>())
+static INVALID_RULE_MSG: &str = "invalid rewrite rule: rules look like 'p=s'";
+
+impl FromStr for RewriteRule {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<_> = s.splitn(2, '=').collect();
+
+        let (pattern, replacement) = match &parts[..] {
+            [pattern, replacement] => (pattern, replacement),
+            _ => return Err(String::from(INVALID_RULE_MSG)),
+        };
+
+        let pattern = pattern.trim().chars().next();
+        let replacement: Vec<_> = replacement.trim().chars().collect();
+        match (pattern, replacement) {
+            (Some(pattern), replacement) if !replacement.is_empty() => {
+                Ok(RewriteRule(pattern, replacement))
+            }
+            _ => Err(String::from(INVALID_RULE_MSG)),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -162,16 +187,46 @@ mod test_rewrite_rule {
 
     #[test]
     fn test_parse_rule() {
-        assert_eq!(Ok(('f', vec!['f', '+', '-'])), parse_rule("f = f+-"));
-        assert_eq!(Ok(('f', vec!['f', 'f'])), parse_rule("f=ff"));
-        assert_eq!(Ok(('-', vec!['f'])), parse_rule("-=f"));
-        assert_eq!(Ok(('-', vec!['='])), parse_rule("-=="));
-        assert_eq!(Err(String::from(INVALID_RULE_MSG)), parse_rule("="));
-        assert_eq!(Err(String::from(INVALID_RULE_MSG)), parse_rule(" = "));
-        assert_eq!(Err(String::from(INVALID_RULE_MSG)), parse_rule("f="));
-        assert_eq!(Err(String::from(INVALID_RULE_MSG)), parse_rule("=f"));
-        assert_eq!(Err(String::from(INVALID_RULE_MSG)), parse_rule("f - "));
-        assert_eq!(Err(String::from(INVALID_RULE_MSG)), parse_rule("f->ff"));
+        assert_eq!(
+            Ok(RewriteRule('f', vec!['f', '+', '-'])),
+            RewriteRule::from_str("f = f+-")
+        );
+        assert_eq!(
+            Ok(RewriteRule('f', vec!['f', 'f'])),
+            RewriteRule::from_str("f=ff")
+        );
+        assert_eq!(
+            Ok(RewriteRule('-', vec!['f'])),
+            RewriteRule::from_str("-=f")
+        );
+        assert_eq!(
+            Ok(RewriteRule('-', vec!['='])),
+            RewriteRule::from_str("-==")
+        );
+        assert_eq!(
+            Err(String::from(INVALID_RULE_MSG)),
+            RewriteRule::from_str("=")
+        );
+        assert_eq!(
+            Err(String::from(INVALID_RULE_MSG)),
+            RewriteRule::from_str(" = ")
+        );
+        assert_eq!(
+            Err(String::from(INVALID_RULE_MSG)),
+            RewriteRule::from_str("f=")
+        );
+        assert_eq!(
+            Err(String::from(INVALID_RULE_MSG)),
+            RewriteRule::from_str("=f")
+        );
+        assert_eq!(
+            Err(String::from(INVALID_RULE_MSG)),
+            RewriteRule::from_str("f - ")
+        );
+        assert_eq!(
+            Err(String::from(INVALID_RULE_MSG)),
+            RewriteRule::from_str("f->ff")
+        );
     }
 }
 
@@ -209,10 +264,10 @@ impl RewriteRules {
         s.into_iter().flat_map(rewrite_or_default).collect()
     }
 
-    fn iter<'a>(&'a self) -> impl Iterator<Item = (char, Vec<char>)> + 'a {
+    fn iter(&self) -> impl Iterator<Item = RewriteRule> + '_ {
         self.rules
             .iter()
-            .flat_map(|(&k, vs)| vs.iter().cloned().map(move |v| (k, v)))
+            .flat_map(|(&k, vs)| vs.iter().cloned().map(move |v| RewriteRule(k, v)))
     }
 }
 
@@ -222,7 +277,7 @@ impl std::iter::FromIterator<RewriteRule> for RewriteRules {
         I: IntoIterator<Item = RewriteRule>,
     {
         let mut rules = HashMap::new();
-        for (pred, succ) in iter.into_iter() {
+        for RewriteRule(pred, succ) in iter.into_iter() {
             rules.entry(pred).or_insert_with(Vec::new).push(succ);
         }
         RewriteRules { rules }
@@ -236,7 +291,10 @@ mod test_rewrite_rules {
     #[test]
     fn test_rewrite_rules_from_iter() {
         // anabena catenula
-        let rules = vec![('a', vec!['a', 'b']), ('b', vec!['a'])];
+        let rules = vec![
+            RewriteRule('a', vec!['a', 'b']),
+            RewriteRule('b', vec!['a']),
+        ];
         let rules: RewriteRules = rules.into_iter().collect();
         assert_eq!(
             rules.rewrite_string("abab".chars()),
